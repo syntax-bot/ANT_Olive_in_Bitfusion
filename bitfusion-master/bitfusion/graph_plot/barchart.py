@@ -72,7 +72,7 @@ class BarChart(object):
         rcParams['font.family'] = 'sans-serif'
         rcParams['font.sans-serif'] = ['Helvetica']
         rcParams['font.size'] = self.GLOBAL_FONTSIZE
-        rcParams['text.usetex'] = True
+        rcParams['text.usetex'] = False
 
         pgf_with_rc_fonts = {"pgf.texsystem": "pdflatex"}
         matplotlib.rcParams.update(pgf_with_rc_fonts)
@@ -106,11 +106,11 @@ class BarChart(object):
             s = str(int(y))
         else:
             s = str(float(y))
-        return r'\sf{%s}' % s
+        return s
 
     def to_times2(self, y, position):
         s = str(float(y))
-        return r'\sf{%s$\times$}' % s
+        return s + 'x'
 
     def autolabel(self, ax, rects):
         if self.ISRATES == True:
