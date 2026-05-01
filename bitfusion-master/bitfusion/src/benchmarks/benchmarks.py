@@ -8,6 +8,9 @@ import logging
 from dnnweaver2.scalar.dtypes import FQDtype, FixedPoint
 
 import os
+import bitfusion.src.benchmarks.ant_bench as ant
+import bitfusion.src.benchmarks.olaccel_bench as ola
+import bitfusion.src.benchmarks.bitfusion_bench as bit
 
 def fc(tensor_in, output_channels=1024,
         f_dtype=None, w_dtype=None,
@@ -28,7 +31,7 @@ def fc(tensor_in, output_channels=1024,
         with get_default_graph().name_scope(act):
             act = _fc
     else:
-        raise ValueError, 'Unknown activation type {}'.format(act)
+        raise ValueError('Unknown activation type {}'.format(act))
 
     return act
 
@@ -56,7 +59,7 @@ def conv(tensor_in, filters=32, stride=None, kernel_size=3, pad='SAME',
         with get_default_graph().name_scope(act):
             act = _conv
     else:
-        raise ValueError, 'Unknown activation type {}'.format(act)
+        raise ValueError('Unknown activation type {}'.format(act))
 
     return act
 
@@ -114,7 +117,7 @@ def write_to_csv(csv_name, fields, stats, graph, csv_path='./'):
 
 def get_bench_numbers(graph, sim_obj, batch_size=1):
     stats = {}
-    for opname, op in graph.op_registry.iteritems():
+    for opname, op in graph.op_registry.items():
         out = sim_obj.get_cycles(op, batch_size)
         if out is not None:
             s, l = out
@@ -749,3 +752,109 @@ if __name__ == "__main__":
         print(nn)
         stats = get_bench_numbers(nn, sim_obj)
         write_to_csv(os.path.join(csv_dir, bench+'.csv'), fields, stats, nn)
+
+def get_precision(precision):
+    if precision == 16:
+        return FQDtype.FXP16
+    if precision == 8:
+        return FQDtype.FXP8
+    if precision == 4:
+        return FQDtype.FXP4
+    if precision == 6:
+        return FQDtype.FXP6
+
+def create_net(net_name, net_list, batch_size):
+    g = Graph(net_name, dataset='imagenet', log_level=logging.INFO)
+    with g.as_default():
+        for idx, op in enumerate(net_list):
+            input_size, kernel_size, output_size, kernel_stride, padding, precision, op_type =  op
+            input_size[0] = input_size[0] * batch_size
+            output_size[0] = output_size[0] * batch_size
+            precision = get_precision(precision)
+
+            if op_type == 0:
+                with g.name_scope('conv'+str(idx)):
+                    out = create_conv(input_size, kernel_size, stride_size=kernel_stride, pad=padding, c_dtype=FQDtype.FXP16, w_dtype=precision)
+                    # print(idx, op, out.shape)
+                    assert out.shape[0] == output_size[0]
+                    assert out.shape[1] == output_size[2]
+                    assert out.shape[2] == output_size[3]
+                    assert out.shape[3] == output_size[1]
+            else:
+                with g.name_scope('fc'+str(idx)):
+                    out = create_fc(input_size, kernel_size, c_dtype=precision, w_dtype=precision)
+                    # print(idx, op, out.shape)
+                    assert out.shape[0] == output_size[0]
+                    assert out.shape[1] == output_size[1]
+    return g
+
+def create_conv(input_size, weight_size, stride_size=None, pad=None, c_dtype=None, w_dtype=None):
+
+    if stride_size is None:
+        stride = (1,1,1,1)
+    else:
+        stride = (1,stride_size[0],stride_size[1],1)
+
+    if isinstance(pad, list):
+        if pad[0] == 0 and pad[1] == 0:
+            pad = 'VALID'
+        else:
+            pad = 'SAME'
+
+    batch_size = input_size[0]
+    output_channels = weight_size[0]
+    input_channels = weight_size[1]
+    kernel_size = (weight_size[2], weight_size[3])
+
+    input = get_tensor(shape=(batch_size, input_size[2], input_size[3], input_size[1]), name='data', dtype=w_dtype, trainable=False)
+    weights = get_tensor(shape=(output_channels, kernel_size[0], kernel_size[1], input_channels), name='weights', dtype=w_dtype)
+    biases = get_tensor(shape=(output_channels), name='biases', dtype=c_dtype)
+    _conv = conv2D(input, weights, biases, stride=stride, pad=pad, dtype=c_dtype)
+    return _conv
+
+def create_fc(input_size, weight_size, c_dtype=None, w_dtype=None):
+    batch_size = input_size[0]
+    output_channels = weight_size[0]
+    input_channels = weight_size[1]
+
+    input = get_tensor(shape=(batch_size, input_size[1]), name='data', dtype=w_dtype, trainable=False)
+    weights = get_tensor(shape=(output_channels, input_channels), name='weights', dtype=w_dtype)
+    biases = get_tensor(shape=(output_channels,), name='biases', dtype=c_dtype)
+    _fc = matmul(input, weights, biases, dtype=c_dtype)
+    return _fc
+
+def get_bench_nn_ant(bench_name, batch_size):
+    if bench_name == 'vgg16':
+        return create_net(bench_name, ant.vgg16, batch_size)
+    elif bench_name == 'resnet18':
+        return create_net(bench_name, ant.resnet18, batch_size)
+    elif bench_name == 'resnet50':
+        return create_net(bench_name, ant.resnet50, batch_size)
+    elif bench_name == 'inceptionv3':
+        return create_net(bench_name, ant.inceptionv3, batch_size)
+    elif bench_name == 'vit':
+        return create_net(bench_name, ant.vit, batch_size)
+
+def get_bench_nn_ola(bench_name, batch_size):
+    if bench_name == 'vgg16':
+        return create_net(bench_name, ola.vgg16, batch_size)
+    elif bench_name == 'resnet18':
+        return create_net(bench_name, ola.resnet18, batch_size)
+    elif bench_name == 'resnet50':
+        return create_net(bench_name, ola.resnet50, batch_size)
+    elif bench_name == 'inceptionv3':
+        return create_net(bench_name, ola.inceptionv3, batch_size)
+    elif bench_name == 'vit':
+        return create_net(bench_name, ola.vit, batch_size)
+
+def get_bench_nn_bit(bench_name, batch_size):
+    if bench_name == 'vgg16':
+        return create_net(bench_name, bit.vgg16, batch_size)
+    elif bench_name == 'resnet18':
+        return create_net(bench_name, bit.resnet18, batch_size)
+    elif bench_name == 'resnet50':
+        return create_net(bench_name, bit.resnet50, batch_size)
+    elif bench_name == 'inceptionv3':
+        return create_net(bench_name, bit.inceptionv3, batch_size)
+    elif bench_name == 'vit':
+        return create_net(bench_name, bit.vit, batch_size)
